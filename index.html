@@ -189,6 +189,8 @@ var API='https://api.github.com', POLL_MS=10000;
 var K={repo:'th-repo',token:'th-token',dev:'th-dev',snap:'th-snap',snaprepo:'th-snaprepo',thread:'th-thread'};
 var demo=location.hash==='#demo';
 var cfg={}, timer=null, pending=[], lastIds={};
+var svgDocs=[]; /* reset per renderChat() pass; collects BOTH turn.artifact and fenced-```svg
+  sources (see svgArtifactPlaceholder below) so a single post-render loop wires every iframe */
 
 function $(i){return document.getElementById(i)}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -310,6 +312,12 @@ function parseBlock(lines,i,n){
       if(cm&&cm[1][0]===ch&&cm[1].length>=len){j++;break}
       body.push(lines[j]);j++;
     }
+    /* fenced ```svg — the write path: a turn posted through conversations.py append --text
+       (plain text, no structured artifact field) can still carry a renderable SVG this way.
+       The fenced content is untrusted exactly like turn.artifact.svg and goes through the
+       SAME unescape -> sanitizeSvg -> sandboxed-srcdoc pipeline, never a shortcut. */
+    if(/^svg$/i.test(lang))
+      return {html:svgArtifactPlaceholder(unescEntities(body.join('\n'))),next:j};
     return {html:'<pre class="md-pre"><code'+(lang?' data-lang="'+lang+'"':'')+'>'+
       body.join('\n')+'</code></pre>',next:j};
   }
@@ -395,6 +403,23 @@ function svgArtifactDoc(svg){
     'svg{display:block;width:100%;height:100%}</style></head><body>'+
     sanitizeSvg(svg)+'</body></html>';
 }
+/* Builds the sandboxed-iframe placeholder AND registers the raw svg into svgDocs[] at the
+   returned index — the ONE entry point both artifact sources (turn.artifact.svg, and a
+   fenced ```svg block found by parseBlock below) go through, so there is exactly one place
+   that ever calls sanitizeSvg/svgArtifactDoc and exactly one markup shape for the card. */
+function svgArtifactPlaceholder(svgRaw){
+  var idx=svgDocs.length; svgDocs.push(svgArtifactDoc(svgRaw));
+  return '<div class="artifact artifact-svg"><div class="artifact-label">svg · sandboxed</div>'+
+    '<iframe class="artifact-frame" sandbox="" data-svg-idx="'+idx+'"></iframe></div>';
+}
+/* Reverses esc() (undo the LATER replacements first, &amp; last) so a fenced ```svg block's
+   ALREADY-ESCAPED body (mdRender esc()'d the whole turn text before any block parsing runs)
+   gets back its literal < > " ' & before sanitizeSvg's tag/attribute regexes see it. Only
+   used on that already-escaped, already-fenced text -- never on anything else. */
+function unescEntities(s){
+  return String(s==null?'':s).replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+    .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&');
+}
 
 /* ---------- chat ---------- */
 function fetchLedger(){
@@ -416,15 +441,11 @@ function renderChat(turns){
   var mine=turns.filter(function(t){return (t.thread||'main')===th}).slice(-60);
   pending=pending.filter(function(p){return !mine.some(function(t){return t.id===p.id})});
   var log=$('log'), atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;
-  var svgDocs=[];
+  svgDocs=[]; /* module-level — parseBlock's fenced-```svg branch pushes into this same
+    array while mdRender() runs below, alongside the structured turn.artifact push here */
   log.innerHTML=mine.map(function(t){
     var isMine=(t.from||'').indexOf(cfg.dev)===0||(t.from||'').indexOf('chaz')===0;
-    var artifactHtml='';
-    if(t.artifact&&t.artifact.type==='svg'){
-      var idx=svgDocs.length; svgDocs.push(svgArtifactDoc(t.artifact.svg));
-      artifactHtml='<div class="artifact artifact-svg"><div class="artifact-label">svg · sandboxed</div>'+
-        '<iframe class="artifact-frame" sandbox="" data-svg-idx="'+idx+'"></iframe></div>';
-    }
+    var artifactHtml=(t.artifact&&t.artifact.type==='svg')?svgArtifactPlaceholder(t.artifact.svg):'';
     return '<div class="turn'+(isMine?' mine':'')+'"><div class="meta">'+esc(t.from)+' · '+
       esc((t.ts||'').replace('T',' ').slice(0,16))+'</div><div class="body md-body">'+mdRender(t.text)+'</div>'+artifactHtml+'</div>'
   }).join('');
@@ -559,7 +580,11 @@ var DEMO_TURNS=[{id:'1',thread:'theseus-mobile',from:'chaz',ts:'2026-07-24T02:00
                  artifact:{type:'svg',svg:'<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><circle cx="100" cy="100" r="90" fill="none" stroke="#a78bfa" stroke-width="2"/><circle cx="100" cy="100" r="60" fill="none" stroke="#a78bfa" stroke-width="1.5"/><circle cx="100" cy="100" r="30" fill="none" stroke="#a78bfa" stroke-width="1"/><line x1="10" y1="100" x2="190" y2="100" stroke="#a78bfa" stroke-width="1"/><line x1="100" y1="10" x2="100" y2="190" stroke="#a78bfa" stroke-width="1"/><circle cx="100" cy="100" r="3" fill="#a78bfa"/></svg>'}},
                 {id:'6',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:05:00Z',
                  text:'svg artifact test fixture — hostile: embedded <script>, onload/onclick handlers, an external <image> beacon, and a javascript: link. All of it should render inert — no script executes, no external request fires.',
-                 artifact:{type:'svg',svg:'<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" onload="window.__hostileOnload=true"><script>try{window.__hostileScriptRan=true;window.top.localStorage.getItem("th-token");fetch("https://example.com/beacon")}catch(e){window.__hostileScriptErr=String(e)}<\/script><circle cx="100" cy="100" r="80" fill="#f87171" onclick="window.__hostileClick=true"/><image href="https://example.com/beacon.png" x="10" y="10" width="30" height="30"/><a href="javascript:window.__hostileLink=true"><text x="30" y="105" fill="#fff">click</text></a></svg>'}}];
+                 artifact:{type:'svg',svg:'<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" onload="window.__hostileOnload=true"><script>try{window.__hostileScriptRan=true;window.top.localStorage.getItem("th-token");fetch("https://example.com/beacon")}catch(e){window.__hostileScriptErr=String(e)}<\/script><circle cx="100" cy="100" r="80" fill="#f87171" onclick="window.__hostileClick=true"/><image href="https://example.com/beacon.png" x="10" y="10" width="30" height="30"/><a href="javascript:window.__hostileLink=true"><text x="30" y="105" fill="#fff">click</text></a></svg>'}},
+                {id:'7',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:06:00Z',
+                 text:'svg WRITE-PATH test fixture — benign, via a fenced ```svg block in plain turn text (what `conversations.py append --text` posts with zero CLI changes):\n\n```svg\n<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><circle cx="100" cy="100" r="90" fill="none" stroke="#a78bfa" stroke-width="2"/><circle cx="100" cy="100" r="60" fill="none" stroke="#a78bfa" stroke-width="1.5"/><circle cx="100" cy="100" r="30" fill="none" stroke="#a78bfa" stroke-width="1"/><line x1="10" y1="100" x2="190" y2="100" stroke="#a78bfa" stroke-width="1"/><line x1="100" y1="10" x2="100" y2="190" stroke="#a78bfa" stroke-width="1"/><circle cx="100" cy="100" r="3" fill="#a78bfa"/></svg>\n```\n\nrest of the turn renders as ordinary markdown.'},
+                {id:'8',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:07:00Z',
+                 text:'svg WRITE-PATH test fixture — hostile, same fenced ```svg route. Should render inert exactly like the structured-artifact hostile fixture above:\n\n```svg\n<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" onload="window.__hostileOnload2=true"><script>try{window.__hostileScriptRan2=true;window.top.localStorage.getItem("th-token");fetch("https://example.com/beacon2")}catch(e){window.__hostileScriptErr2=String(e)}<\/script><circle cx="100" cy="100" r="80" fill="#f87171" onclick="window.__hostileClick2=true"/><image href="https://example.com/beacon2.png" x="10" y="10" width="30" height="30"/><a href="javascript:window.__hostileLink2=true"><text x="30" y="105" fill="#fff">click</text></a></svg>\n```'}];
 var DEMO_SNAP={generated_at:'demo',kernel:{status:'ok',state:'dormant',identity:'cog'},
   wake_line_watcher_alive:true,topology:{shape:'star',nodes:44,edges:43,components:1,lambda2:1,spectral_ratio:44,hub:'kernel:cogos'},
   sessions:[{session_id:'seat-root',role:'seat-root',active:true}],
