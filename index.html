@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src data:; base-uri 'none'; form-action 'none'">
+<title>THESEUS</title>
+<!--
+  THESEUS mobile shell — chat + node, one page (RFC-039).
+
+  The book's public-shell pattern generalized. This file holds ZERO data and ZERO
+  private names: the config paste supplies owner/repo/branch at runtime, exactly
+  as the book client discovers its repo from the key. That is deliberate and
+  load-bearing — the repo-side chat/index.html hardcodes the private repo name in
+  three places, which is why it cannot itself be published anywhere.
+
+  CHAT reads conversations/ledger.json and writes turns as receipts into
+  conversations/inbox/, which the conversations-ingest workflow settles. Trust is
+  commit identity; the PAT is the operator's own, scoped to one repo.
+
+  NODE reads constellation.json off the snapshot branch and can send intent
+  receipts (refresh / speak) that the publisher settles on the machine.
+
+  Shipping this to a public Pages repo is an operator-gated membrane decision
+  (conversations/README.md reserves that crossing explicitly). Before shipping:
+  grep the file for any private repo name — it should find nothing.
+
+  #demo renders inline sample data with no network and no credentials.
+-->
+<style>
+  :root{
+    --bg:#0d0b12; --panel:#16121f; --edge:#2a2338; --ink:#d8d3e4; --dim:#8a819f;
+    --accent:#a78bfa; --accent-dim:#7c5fd3; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171;
+    --mine:#241d33; --mono:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,system-ui,sans-serif;
+       display:flex;flex-direction:column;
+       padding:max(8px,env(safe-area-inset-top)) 10px max(8px,env(safe-area-inset-bottom))}
+  header{display:flex;align-items:center;gap:10px;padding:4px 2px 10px;flex:0 0 auto}
+  header h1{font-size:16px;letter-spacing:.18em;color:var(--accent);font-weight:600}
+  #asof{font:11px var(--mono);color:var(--dim);margin-left:auto}
+  nav{display:flex;gap:6px;flex:0 0 auto;margin-bottom:10px}
+  nav button{flex:1;background:var(--panel);border:1px solid var(--edge);color:var(--dim);
+             border-radius:8px;padding:8px;font:12px var(--mono);letter-spacing:.1em;cursor:pointer}
+  nav button.on{background:var(--accent-dim);border-color:var(--accent-dim);color:#fff}
+  .view{display:none;flex:1 1 auto;min-height:0;flex-direction:column}
+  .view.on{display:flex}
+  .panel{background:var(--panel);border:1px solid var(--edge);border-radius:10px;
+         padding:11px 13px;margin-bottom:10px}
+  .panel h2{font-size:10px;text-transform:uppercase;letter-spacing:.16em;color:var(--dim);margin-bottom:7px}
+  table{border-collapse:collapse;width:100%;font:12px var(--mono)}
+  td,th{padding:3px 8px 3px 0;text-align:left;vertical-align:top;font-variant-numeric:tabular-nums}
+  th{color:var(--dim);font-weight:400}
+  .scroll{overflow-x:auto}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .ok{background:var(--ok)} .warn{background:var(--warn)} .bad{background:var(--bad)}
+  .tag{font:10px var(--mono);color:var(--accent);background:var(--mine);border-radius:4px;padding:1px 6px}
+  input,textarea,button,select{font:14px var(--mono);color:var(--ink);background:#0f0c16;
+       border:1px solid var(--edge);border-radius:8px;padding:9px 10px;width:100%}
+  input:focus,textarea:focus{outline:1px solid var(--accent-dim)}
+  button.go{background:var(--accent-dim);border:none;color:#fff;font-weight:600;width:auto;padding:9px 16px;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid var(--edge);color:var(--dim);width:auto;padding:9px 14px;cursor:pointer}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .note{font-size:11px;color:var(--dim)}
+  #err{color:var(--bad);font:11px var(--mono);white-space:pre-wrap}
+  /* chat */
+  #log{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:2px 0 8px}
+  .turn{margin-bottom:12px}
+  .meta{font:10px var(--mono);color:var(--dim);margin-bottom:3px}
+  .body{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel);
+        border:1px solid var(--edge);border-radius:10px;padding:9px 11px;font-size:14px}
+  .turn.mine .body{background:var(--mine);border-color:var(--accent-dim)}
+  .composer{flex:0 0 auto;display:flex;gap:8px;align-items:flex-end;padding-top:8px}
+  .composer textarea{resize:none;min-height:44px;max-height:140px}
+  #pending{font:10px var(--mono);color:var(--warn)}
+</style>
+</head>
+<body>
+<header>
+  <h1>THESEUS</h1>
+  <select id="thread" style="width:auto;padding:5px 8px;font-size:12px"></select>
+  <span id="asof">—</span>
+</header>
+
+<nav>
+  <button id="tab-chat" class="on">CHAT</button>
+  <button id="tab-node">NODE</button>
+  <button id="tab-cfg">⚙</button>
+</nav>
+
+<!-- CHAT -->
+<section id="v-chat" class="view on">
+  <div id="log"></div>
+  <div id="pending"></div>
+  <div class="composer">
+    <textarea id="msg" rows="1" placeholder="message…"></textarea>
+    <button class="go" id="send">Send</button>
+  </div>
+</section>
+
+<!-- NODE -->
+<section id="v-node" class="view">
+  <div style="overflow-y:auto;flex:1 1 auto">
+    <div class="panel"><h2>Node</h2><div id="p-node">—</div></div>
+    <div class="panel"><h2>Topology</h2><div id="p-topo">—</div></div>
+    <div class="panel"><h2>Sessions</h2><div class="scroll" id="p-sessions">—</div></div>
+    <div class="panel"><h2>Voice · Inference</h2><div id="p-voice">—</div></div>
+    <div class="panel"><h2>Intents</h2>
+      <div class="row" style="margin-bottom:8px"><button class="go" id="i-refresh">Refresh snapshot</button></div>
+      <textarea id="i-speak-text" rows="2" placeholder="text for the node to speak aloud"></textarea>
+      <div class="row" style="margin-top:8px"><button class="go" id="i-speak">Speak on node</button>
+        <span class="note">acted next publisher cycle</span></div>
+      <div id="intent-log" class="note"></div>
+    </div>
+  </div>
+</section>
+
+<!-- CONFIG -->
+<section id="v-cfg" class="view">
+  <div class="panel">
+    <h2>Connection</h2>
+    <div style="display:grid;gap:8px">
+      <input id="cfg-repo" placeholder="owner/repo (the private one)" autocomplete="off" spellcheck="false">
+      <input id="cfg-token" type="password" placeholder="fine-grained PAT · Contents read+write · that repo only" autocomplete="off">
+      <input id="cfg-device" placeholder="device name (e.g. fold)" autocomplete="off" spellcheck="false">
+      <input id="cfg-snap" placeholder="snapshot branch (default constellation-live)" autocomplete="off" spellcheck="false">
+      <input id="cfg-snaprepo" placeholder="snapshot owner/repo (optional, if different)" autocomplete="off" spellcheck="false">
+      <div class="row">
+        <button class="go" id="cfg-save">Connect</button>
+        <button class="ghost" id="cfg-clear">Forget</button>
+      </div>
+      <div class="note">Stored in this browser only. Sent to api.github.com and nowhere else.</div>
+      <div id="err"></div>
+    </div>
+  </div>
+</section>
+
+<script>
+"use strict";
+var API='https://api.github.com', POLL_MS=10000;
+var K={repo:'th-repo',token:'th-token',dev:'th-dev',snap:'th-snap',snaprepo:'th-snaprepo',thread:'th-thread'};
+var demo=location.hash==='#demo';
+var cfg={}, timer=null, pending=[], lastIds={};
+
+function $(i){return document.getElementById(i)}
+function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
+function load(){try{for(var k in K)cfg[k]=localStorage.getItem(K[k])}catch(e){}
+  cfg.snap=cfg.snap||'constellation-live'; cfg.dev=cfg.dev||'phone'; cfg.thread=cfg.thread||'theseus-mobile'}
+function save(){try{for(var k in K)if(cfg[k]!=null)localStorage.setItem(K[k],cfg[k])}catch(e){}}
+function hdr(raw){return {'Authorization':'Bearer '+cfg.token,'X-GitHub-Api-Version':'2022-11-28',
+  'Accept': raw?'application/vnd.github.raw+json':'application/vnd.github+json'}}
+function snapRepo(){return cfg.snaprepo||cfg.repo}
+
+/* ---------- chat ---------- */
+function fetchLedger(){
+  if(demo){renderChat(DEMO_TURNS);return}
+  fetch(API+'/repos/'+cfg.repo+'/contents/conversations/ledger.json',{headers:hdr(true)})
+    .then(function(r){if(!r.ok)throw new Error('ledger HTTP '+r.status);return r.json()})
+    .then(function(d){$('err').textContent='';renderChat(d.turns||[])})
+    .catch(function(e){$('err').textContent=e.message})
+}
+function renderChat(turns){
+  var th=cfg.thread;
+  var names={};turns.forEach(function(t){if(t.thread)names[t.thread]=1});
+  var sel=$('thread');
+  if(sel.options.length!==Object.keys(names).length){
+    sel.innerHTML='';Object.keys(names).sort().forEach(function(n){
+      var o=document.createElement('option');o.value=n;o.textContent=n;sel.appendChild(o)})
+  }
+  sel.value=th;
+  var mine=turns.filter(function(t){return (t.thread||'main')===th}).slice(-60);
+  pending=pending.filter(function(p){return !mine.some(function(t){return t.id===p.id})});
+  var log=$('log'), atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;
+  log.innerHTML=mine.map(function(t){
+    var isMine=(t.from||'').indexOf(cfg.dev)===0||(t.from||'').indexOf('chaz')===0;
+    return '<div class="turn'+(isMine?' mine':'')+'"><div class="meta">'+esc(t.from)+' · '+
+      esc((t.ts||'').replace('T',' ').slice(0,16))+'</div><div class="body">'+esc(t.text)+'</div></div>'
+  }).join('');
+  $('pending').textContent=pending.length?pending.length+' sending…':'';
+  $('asof').textContent=mine.length+' turns';
+  if(atBottom)log.scrollTop=log.scrollHeight;
+}
+function send(){
+  var text=$('msg').value.trim(); if(!text)return;
+  if(demo){$('msg').value='';return}
+  var id=Date.now()+'-'+cfg.dev;
+  var turn={id:id,thread:cfg.thread,from:cfg.dev,ts:new Date().toISOString(),text:text,origin:'turn'};
+  var body={count:1,turns:[turn]};
+  var content=btoa(unescape(encodeURIComponent(JSON.stringify(body,null,2)+'\n')));
+  $('msg').value=''; pending.push(turn); $('pending').textContent=pending.length+' sending…';
+  fetch(API+'/repos/'+cfg.repo+'/contents/conversations/inbox/'+id+'.json',{
+    method:'PUT',headers:hdr(false),
+    body:JSON.stringify({message:'chat receipt from '+cfg.dev,content:content,branch:'main'})
+  }).then(function(r){if(!r.ok)throw new Error('send HTTP '+r.status);setTimeout(fetchLedger,1500)})
+    .catch(function(e){$('err').textContent=e.message;
+      pending=pending.filter(function(p){return p.id!==id})})
+}
+
+/* ---------- node ---------- */
+function fetchSnap(){
+  if(demo){renderNode(DEMO_SNAP);return}
+  fetch(API+'/repos/'+snapRepo()+'/contents/constellation.json?ref='+encodeURIComponent(cfg.snap),{headers:hdr(true)})
+    .then(function(r){if(!r.ok)throw new Error('snap HTTP '+r.status);return r.json()})
+    .then(renderNode).catch(function(e){$('p-node').textContent=e.message})
+}
+function renderNode(s){
+  var k=s.kernel||{};
+  $('p-node').innerHTML='<span class="dot '+(k.status==='ok'?'ok':'bad')+'"></span>kernel '+esc(k.status)+
+    ' / '+esc(k.state)+' · <span class="tag">'+esc(k.identity)+'</span><br><span class="dot '+
+    (s.wake_line_watcher_alive?'ok':'bad')+'"></span>wake line '+(s.wake_line_watcher_alive?'alive':'DEAD')+
+    '<br><span class="note">'+esc(s.generated_at)+'</span>';
+  var t=s.topology||{};
+  $('p-topo').innerHTML=t.shape?('<b>'+esc(t.shape)+'</b> · '+esc(t.nodes)+' nodes, '+esc(t.edges)+
+    ' edges, '+esc(t.components)+' comp<br>λ₂ <b>'+esc(t.lambda2)+'</b> · ratio '+esc(t.spectral_ratio)+
+    '<br><span class="note">hub '+esc(t.hub)+'</span>'):'—';
+  $('p-sessions').innerHTML='<table><tr><th></th><th>session</th><th>role</th></tr>'+
+    (s.sessions||[]).map(function(x){return '<tr><td>'+(x.active?'●':'○')+'</td><td>'+
+      esc(x.session_id)+'</td><td>'+esc(x.role||'')+'</td></tr>'}).join('')+'</table>';
+  var m=s.mod3||{},lm=Array.isArray(s.lms_models)?s.lms_models:[];
+  $('p-voice').innerHTML=(m._unreachable?'<span class="dot bad"></span>mod3 unreachable':
+    '<span class="dot ok"></span>mod3 · '+esc((m.engines||[]).join(', ')))+
+    '<br><span class="dot '+(lm.length?'ok':'warn')+'"></span>'+esc(lm.join(', ')||'LMS unreachable');
+  if(s.settled_intents&&s.settled_intents.length)
+    logIntent(s.settled_intents.map(function(i){return i.id+' → '+i.outcome}).join(' · '));
+}
+function logIntent(m){var d=document.createElement('div');d.textContent=m;$('intent-log').prepend(d)}
+function sendIntent(verb,extra){
+  if(demo){logIntent('(demo) '+verb);return}
+  var id=Date.now()+'-'+cfg.dev+'-'+verb;
+  var body=Object.assign({verb:verb,from:cfg.dev,requested_at:new Date().toISOString()},extra||{});
+  fetch(API+'/repos/'+snapRepo()+'/contents/intents/inbox/'+id+'.json',{
+    method:'PUT',headers:hdr(false),
+    body:JSON.stringify({message:'intent receipt: '+verb,
+      content:btoa(unescape(encodeURIComponent(JSON.stringify(body,null,2)+'\n'))),branch:cfg.snap})
+  }).then(function(r){logIntent(r.ok?('sent '+verb+' — pending'):('failed HTTP '+r.status))})
+    .catch(function(e){logIntent('failed: '+e.message)})
+}
+
+/* ---------- shell ---------- */
+// Single-endpoint routing: eigen.forum/theseus?channel=<thread> deep-links a
+// channel. GitHub Pages is static and ignores the query for file resolution, so
+// ONE file serves every channel and the JS reads the param — no server redirect,
+// no per-channel file, no 404 fallback needed. Query is his form; #hash is the
+// fully-static fallback (works even off a file:// origin). The channel is a UX
+// preselect only; it grants no access — the PAT is the sole data gate.
+function urlChannel(){
+  try{
+    var q=new URLSearchParams(location.search).get('channel');
+    if(q&&/^[\w-]+$/.test(q))return q;
+    var h=(location.hash||'').replace(/^#/,'');
+    if(!h||h==='demo')return null;
+    var m=h.match(/channel=([\w-]+)/); if(m)return m[1];
+    if(/^[\w-]+$/.test(h))return h;
+  }catch(e){}
+  return null;
+}
+// Reflect the open channel in the address bar so copying the URL is a deep link.
+function syncUrl(){
+  if(demo)return;
+  try{history.replaceState(null,'',location.pathname+'?channel='+encodeURIComponent(cfg.thread));}catch(e){}
+}
+function tab(n){
+  ['chat','node','cfg'].forEach(function(x){
+    $('v-'+x).classList.toggle('on',x===n); $('tab-'+x).classList.toggle('on',x===n)});
+  if(n==='node')fetchSnap();
+}
+$('tab-chat').onclick=function(){tab('chat')};
+$('tab-node').onclick=function(){tab('node')};
+$('tab-cfg').onclick=function(){tab('cfg')};
+$('send').onclick=send;
+$('msg').addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();send()}});
+$('thread').onchange=function(){cfg.thread=this.value;save();syncUrl();fetchLedger()};
+$('i-refresh').onclick=function(){sendIntent('refresh')};
+$('i-speak').onclick=function(){var t=$('i-speak-text').value.trim();
+  if(t){sendIntent('speak',{text:t});$('i-speak-text').value=''}};
+$('cfg-clear').onclick=function(){try{for(var k in K)localStorage.removeItem(K[k])}catch(e){}location.reload()};
+$('cfg-save').onclick=function(){
+  var r=$('cfg-repo').value.trim();
+  if(!demo&&!/^[\w.-]+\/[\w.-]+$/.test(r)){$('err').textContent='repo must be owner/repo';return}
+  if(!demo&&!$('cfg-token').value.trim()){$('err').textContent='a token is required';return}
+  cfg.repo=r; cfg.token=$('cfg-token').value.trim();
+  cfg.dev=$('cfg-device').value.trim()||'phone';
+  cfg.snap=$('cfg-snap').value.trim()||'constellation-live';
+  cfg.snaprepo=$('cfg-snaprepo').value.trim();
+  save(); start();
+};
+
+function start(){
+  tab('chat'); syncUrl(); fetchLedger();
+  if(timer)clearInterval(timer);
+  timer=setInterval(function(){ if($('v-chat').classList.contains('on'))fetchLedger();
+                                else if($('v-node').classList.contains('on'))fetchSnap() },POLL_MS);
+}
+
+var DEMO_TURNS=[{id:'1',thread:'theseus-mobile',from:'chaz',ts:'2026-07-24T02:00:00Z',text:'demo turn from the operator'},
+                {id:'2',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:01:00Z',text:'demo reply from the seat'}];
+var DEMO_SNAP={generated_at:'demo',kernel:{status:'ok',state:'dormant',identity:'cog'},
+  wake_line_watcher_alive:true,topology:{shape:'star',nodes:44,edges:43,components:1,lambda2:1,spectral_ratio:44,hub:'kernel:cogos'},
+  sessions:[{session_id:'seat-root',role:'seat-root',active:true}],
+  mod3:{engines:['kokoro','chatterbox-turbo']},lms_models:['ornith-1.0-35b']};
+
+load();
+if(demo){cfg.thread='theseus-mobile';start()}
+else{
+  var _uc=urlChannel(); if(_uc)cfg.thread=_uc;   // /theseus?channel=X wins over stored
+  if(cfg.repo&&cfg.token){$('cfg-repo').value=cfg.repo;$('cfg-device').value=cfg.dev;
+    $('cfg-snap').value=cfg.snap;start()}
+  else tab('cfg');
+}
+</script>
+</body>
+</html>
