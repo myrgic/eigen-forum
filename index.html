@@ -3,8 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
 <title>THESEUS</title>
+<!-- Installable: home-screen app, standalone, offline shell (never the API). -->
+<meta name="theme-color" content="#0d0b12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="THESEUS">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <!--
   THESEUS mobile shell — chat + node, one page (RFC-039).
 
@@ -309,6 +317,15 @@ else{
   if(cfg.repo&&cfg.token){$('cfg-repo').value=cfg.repo;$('cfg-device').value=cfg.dev;
     $('cfg-snap').value=cfg.snap;start()}
   else tab('cfg');
+}
+
+// Register the shell service worker so eigen.forum installs as a home-screen
+// app and works offline. The worker caches ONLY the shell (page, manifest,
+// icons) and never touches api.github.com — the ledger and your token are
+// never cached, exactly the book shell's discipline. Best-effort; a failed
+// registration just means no offline, never a broken page.
+if('serviceWorker' in navigator){
+  window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});
 }
 </script>
 </body>
