@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'">
 <title>THESEUS</title>
 <!-- Installable: home-screen app, standalone, offline shell (never the API). -->
 <meta name="theme-color" content="#0d0b12">
@@ -111,6 +111,13 @@
   .md-table tr:nth-child(even) td{background:rgba(255,255,255,.02)}
   .md-body a{color:var(--accent);text-decoration:underline;text-decoration-color:var(--accent-dim)}
   .md-body a:visited{color:var(--accent)}
+  /* svg artifact card (see sanitizeSvg/svgArtifactDoc in script) */
+  .artifact{margin-top:8px}
+  .artifact-label{font:10px var(--mono);color:var(--accent);letter-spacing:.1em;
+        text-transform:uppercase;margin-bottom:5px}
+  .artifact-svg{background:#0f0c16;border:1px solid var(--accent-dim);border-radius:10px;
+        padding:10px;max-width:320px}
+  .artifact-frame{display:block;width:100%;aspect-ratio:1/1;border:0;background:transparent}
   .composer{flex:0 0 auto;display:flex;gap:8px;align-items:flex-end;padding-top:8px}
   .composer textarea{resize:none;min-height:44px;max-height:140px}
   #pending{font:10px var(--mono);color:var(--warn)}
@@ -353,6 +360,42 @@ function mdRender(raw){
   return renderBlocksFrom(esc(text).split('\n'));
 }
 
+/* ---------- svg artifact (first inline artifact type — RFC-039 widget pipeline) ----------
+   THE security boundary: this shell holds the operator's GitHub PAT in localStorage.
+   Every SVG artifact renders inside a NULL-ORIGIN SANDBOXED IFRAME via srcdoc — the
+   `sandbox` attribute below carries NEITHER `allow-scripts` NOR `allow-same-origin`,
+   so the frame gets an opaque origin with scripting disabled outright. An opaque
+   origin with no same-origin grant cannot read window.parent.localStorage /
+   top.localStorage even if a hostile <script> made it into the markup — that denial
+   IS the isolation, not a courtesy of the sanitizer below. sanitizeSvg() is
+   defense-in-depth on top of the sandbox, never a substitute for it: it strips the
+   obvious hostile surface (script, foreignObject, event handlers, external refs)
+   before the string ever reaches srcdoc. The nested document also carries its own
+   restrictive CSP meta, so even an external ref that slipped past the sanitizer
+   still can't fetch (img-src is data: only, everything else default-src 'none').
+   TODO(blob-ref artifact variant): today artifact.svg is an inline string. A future
+   artifact.ref (content-addressed blob id / URL) variant should resolve to a string
+   here and flow through this same sanitize -> srcdoc pipeline unchanged. */
+function sanitizeSvg(raw){
+  var s=String(raw==null?'':raw);
+  s=s.replace(/<script\b[\s\S]*?<\/script\s*>/gi,'');
+  s=s.replace(/<foreignObject\b[\s\S]*?<\/foreignObject\s*>/gi,'');
+  s=s.replace(/\son[a-z]+\s*=\s*"(?:[^"\\]|\\.)*"/gi,'');
+  s=s.replace(/\son[a-z]+\s*=\s*'(?:[^'\\]|\\.)*'/gi,'');
+  s=s.replace(/\son[a-z]+\s*=\s*[^\s>]+/gi,'');
+  s=s.replace(/\s(xlink:href|href|src)\s*=\s*"(?!data:)[^"]*"/gi,'');
+  s=s.replace(/\s(xlink:href|href|src)\s*=\s*'(?!data:)[^']*'/gi,'');
+  s=s.replace(/url\(\s*(['"]?)(?!data:)[\s\S]*?\1\s*\)/gi,'url()');
+  return s;
+}
+function svgArtifactDoc(svg){
+  return '<!doctype html><html><head><meta charset="utf-8">'+
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">'+
+    '<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}'+
+    'svg{display:block;width:100%;height:100%}</style></head><body>'+
+    sanitizeSvg(svg)+'</body></html>';
+}
+
 /* ---------- chat ---------- */
 function fetchLedger(){
   if(demo){renderChat(DEMO_TURNS);return}
@@ -373,11 +416,23 @@ function renderChat(turns){
   var mine=turns.filter(function(t){return (t.thread||'main')===th}).slice(-60);
   pending=pending.filter(function(p){return !mine.some(function(t){return t.id===p.id})});
   var log=$('log'), atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;
+  var svgDocs=[];
   log.innerHTML=mine.map(function(t){
     var isMine=(t.from||'').indexOf(cfg.dev)===0||(t.from||'').indexOf('chaz')===0;
+    var artifactHtml='';
+    if(t.artifact&&t.artifact.type==='svg'){
+      var idx=svgDocs.length; svgDocs.push(svgArtifactDoc(t.artifact.svg));
+      artifactHtml='<div class="artifact artifact-svg"><div class="artifact-label">svg · sandboxed</div>'+
+        '<iframe class="artifact-frame" sandbox="" data-svg-idx="'+idx+'"></iframe></div>';
+    }
     return '<div class="turn'+(isMine?' mine':'')+'"><div class="meta">'+esc(t.from)+' · '+
-      esc((t.ts||'').replace('T',' ').slice(0,16))+'</div><div class="body md-body">'+mdRender(t.text)+'</div></div>'
+      esc((t.ts||'').replace('T',' ').slice(0,16))+'</div><div class="body md-body">'+mdRender(t.text)+'</div>'+artifactHtml+'</div>'
   }).join('');
+  /* srcdoc is set as a DOM property, not baked into the HTML string above — that
+     keeps the sanitized document out of attribute-escaping entirely. */
+  Array.prototype.forEach.call(log.querySelectorAll('iframe[data-svg-idx]'),function(f){
+    f.srcdoc=svgDocs[+f.getAttribute('data-svg-idx')];
+  });
   $('pending').textContent=pending.length?pending.length+' sending…':'';
   $('asof').textContent=mine.length+' turns';
   if(atBottom)log.scrollTop=log.scrollHeight;
@@ -498,7 +553,13 @@ function start(){
 var DEMO_TURNS=[{id:'1',thread:'theseus-mobile',from:'chaz',ts:'2026-07-24T02:00:00Z',text:'demo turn from the operator'},
                 {id:'2',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:01:00Z',text:'demo reply from the seat'},
                 {id:'3',thread:'theseus-mobile',from:'chaz',ts:'2026-07-24T02:02:00Z',text:'# Heading one\n## Heading two\n### Heading three\n\n**bold**, *italic*, ~~strikethrough~~, and `inline code`.\n\n> A blockquote.\n> Second line, same quote.\n\n- unordered item\n- another item\n  - nested item\n  - second nested item\n- back to top level\n\n1. ordered item\n2. ordered item\n   1. nested ordered\n   2. nested ordered\n\n---\n\n```js\nfunction hi(name) {\n  return `hello, ${name}`;\n}\n```\n\n| col A | col B | col C |\n|-------|:-----:|------:|\n| left  | mid   | right |\n| a     | b     | c     |\n\nA [safe link](https://eigen.forum) to close it out.'},
-                {id:'4',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:03:00Z',text:'raw tag: <img src=x onerror=alert(1)>\nscript tag: <script>alert(document.cookie)<\/script>\nbad scheme link: [click me](javascript:alert(1))\ndata uri link: [data link](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)\ninline html attr: <b onmouseover=alert(1)>bold?</b>'}];
+                {id:'4',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:03:00Z',text:'raw tag: <img src=x onerror=alert(1)>\nscript tag: <script>alert(document.cookie)<\/script>\nbad scheme link: [click me](javascript:alert(1))\ndata uri link: [data link](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)\ninline html attr: <b onmouseover=alert(1)>bold?</b>'},
+                {id:'5',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:04:00Z',
+                 text:'svg artifact test fixture — benign: concentric circles + a rule line (astrolabe-ish placeholder; the real THESEUS emblem lands through this same pipeline later).',
+                 artifact:{type:'svg',svg:'<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><circle cx="100" cy="100" r="90" fill="none" stroke="#a78bfa" stroke-width="2"/><circle cx="100" cy="100" r="60" fill="none" stroke="#a78bfa" stroke-width="1.5"/><circle cx="100" cy="100" r="30" fill="none" stroke="#a78bfa" stroke-width="1"/><line x1="10" y1="100" x2="190" y2="100" stroke="#a78bfa" stroke-width="1"/><line x1="100" y1="10" x2="100" y2="190" stroke="#a78bfa" stroke-width="1"/><circle cx="100" cy="100" r="3" fill="#a78bfa"/></svg>'}},
+                {id:'6',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:05:00Z',
+                 text:'svg artifact test fixture — hostile: embedded <script>, onload/onclick handlers, an external <image> beacon, and a javascript: link. All of it should render inert — no script executes, no external request fires.',
+                 artifact:{type:'svg',svg:'<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" onload="window.__hostileOnload=true"><script>try{window.__hostileScriptRan=true;window.top.localStorage.getItem("th-token");fetch("https://example.com/beacon")}catch(e){window.__hostileScriptErr=String(e)}<\/script><circle cx="100" cy="100" r="80" fill="#f87171" onclick="window.__hostileClick=true"/><image href="https://example.com/beacon.png" x="10" y="10" width="30" height="30"/><a href="javascript:window.__hostileLink=true"><text x="30" y="105" fill="#fff">click</text></a></svg>'}}];
 var DEMO_SNAP={generated_at:'demo',kernel:{status:'ok',state:'dormant',identity:'cog'},
   wake_line_watcher_alive:true,topology:{shape:'star',nodes:44,edges:43,components:1,lambda2:1,spectral_ratio:44,hub:'kernel:cogos'},
   sessions:[{session_id:'seat-root',role:'seat-root',active:true}],
