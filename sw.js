@@ -4,9 +4,9 @@
    transit authenticated reads and live in memory/localStorage, nowhere in the
    cache. Same discipline as the book shell. */
 'use strict';
-var VERSION = 'theseus-shell-v2'; /* bumped for the svg-artifact renderer (structured +
-  fenced-```svg write path) -- cache-first sw.js needs a manual VERSION bump on every
-  dome-shell change until it moves to network-first / stale-while-revalidate (see report) */
+var VERSION = 'theseus-shell-v3'; /* bumped for the [#channel] link-pill renderer --
+  cache-first sw.js needs a manual VERSION bump on every dome-shell change until it
+  moves to network-first / stale-while-revalidate (flagged as a durable follow-up) */
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {

@@ -118,6 +118,12 @@
   .artifact-svg{background:#0f0c16;border:1px solid var(--accent-dim);border-radius:10px;
         padding:10px;max-width:320px}
   .artifact-frame{display:block;width:100%;aspect-ratio:1/1;border:0;background:transparent}
+  /* channel-link pill: [#name] in turn text -> in-page channel switch (see setChannel) */
+  .chan-pill{display:inline-flex;align-items:center;background:var(--mine);
+        border:1px solid var(--accent-dim);color:var(--accent);border-radius:999px;
+        font:12px var(--mono);font-weight:600;padding:7px 13px;margin:1px 2px;
+        cursor:pointer;line-height:1;-webkit-tap-highlight-color:transparent}
+  .chan-pill:active{background:var(--accent-dim);color:#fff}
   .composer{flex:0 0 auto;display:flex;gap:8px;align-items:flex-end;padding-top:8px}
   .composer textarea{resize:none;min-height:44px;max-height:140px}
   #pending{font:10px var(--mono);color:var(--warn)}
@@ -229,6 +235,15 @@ function renderInline(s){
   var stash=[];
   function keep(html){stash.push(html);return '\u0001'+(stash.length-1)+'\u0002'}
   s=s.replace(/`([^`\n]+?)`/g,function(_,code){return keep('<code>'+code+'</code>')});
+  /* channel-link pill: [#name] -> a tappable pill that switches THIS shell's own channel
+     in-page (setChannel below), never a URL, never a link. The capture group IS the
+     strict boundary -- only A-Za-z0-9._- ever becomes a pill; anything else (a scheme,
+     a bracket, a slash, `javascript:`, an external URL) simply fails to match and is left
+     as inert literal text, same allowlist posture as safeHref just above. setChannel()
+     re-checks the identical charset before acting, defense-in-depth on top of this. */
+  s=s.replace(/\[#([A-Za-z0-9._-]+)\]/g,function(_,name){
+    return keep('<button type="button" class="chan-pill" data-channel="'+esc(name)+'">#'+esc(name)+'</button>');
+  });
   s=s.replace(/\[([^\[\]\n]+)\]\(\s*([^()\s][^()]*?)\s*\)/g,function(_,text,url){
     var href=safeHref(url), inner=emphasize(text);
     if(href)return keep('<a href="'+href+'" target="_blank" rel="noopener noreferrer">'+inner+'</a>');
@@ -454,6 +469,11 @@ function renderChat(turns){
   Array.prototype.forEach.call(log.querySelectorAll('iframe[data-svg-idx]'),function(f){
     f.srcdoc=svgDocs[+f.getAttribute('data-svg-idx')];
   });
+  /* [#name] pills: wired via addEventListener post-render, same posture as the iframe
+     loop above -- never an inline onclick= attribute in the generated markup. */
+  Array.prototype.forEach.call(log.querySelectorAll('button.chan-pill'),function(b){
+    b.addEventListener('click',function(){setChannel(b.getAttribute('data-channel'))});
+  });
   $('pending').textContent=pending.length?pending.length+' sending…':'';
   $('asof').textContent=mine.length+' turns';
   if(atBottom)log.scrollTop=log.scrollHeight;
@@ -537,6 +557,15 @@ function syncUrl(){
   if(demo)return;
   try{history.replaceState(null,'',location.pathname+'?channel='+encodeURIComponent(cfg.thread));}catch(e){}
 }
+/* THE one channel-switch path: the #thread dropdown's onchange and every rendered
+   [#name] pill both call this, and only this, to move channels. Re-validates the
+   channel-name charset regardless of caller -- render-time already restricted a pill's
+   data-channel to this same charset, but this is the point that actually mutates
+   cfg.thread, so it checks again rather than trusting the caller. */
+function setChannel(name){
+  if(!/^[A-Za-z0-9._-]+$/.test(String(name||'')))return;
+  cfg.thread=name; save(); syncUrl(); fetchLedger();
+}
 function tab(n){
   ['chat','node','cfg'].forEach(function(x){
     $('v-'+x).classList.toggle('on',x===n); $('tab-'+x).classList.toggle('on',x===n)});
@@ -548,7 +577,7 @@ $('tab-cfg').onclick=function(){tab('cfg')};
 $('send').onclick=send;
 $('msg').addEventListener('keydown',function(e){
   if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();send()}});
-$('thread').onchange=function(){cfg.thread=this.value;save();syncUrl();fetchLedger()};
+$('thread').onchange=function(){setChannel(this.value)};
 $('i-refresh').onclick=function(){sendIntent('refresh')};
 $('i-speak').onclick=function(){var t=$('i-speak-text').value.trim();
   if(t){sendIntent('speak',{text:t});$('i-speak-text').value=''}};
@@ -584,7 +613,13 @@ var DEMO_TURNS=[{id:'1',thread:'theseus-mobile',from:'chaz',ts:'2026-07-24T02:00
                 {id:'7',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:06:00Z',
                  text:'svg WRITE-PATH test fixture — benign, via a fenced ```svg block in plain turn text (what `conversations.py append --text` posts with zero CLI changes):\n\n```svg\n<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><circle cx="100" cy="100" r="90" fill="none" stroke="#a78bfa" stroke-width="2"/><circle cx="100" cy="100" r="60" fill="none" stroke="#a78bfa" stroke-width="1.5"/><circle cx="100" cy="100" r="30" fill="none" stroke="#a78bfa" stroke-width="1"/><line x1="10" y1="100" x2="190" y2="100" stroke="#a78bfa" stroke-width="1"/><line x1="100" y1="10" x2="100" y2="190" stroke="#a78bfa" stroke-width="1"/><circle cx="100" cy="100" r="3" fill="#a78bfa"/></svg>\n```\n\nrest of the turn renders as ordinary markdown.'},
                 {id:'8',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:07:00Z',
-                 text:'svg WRITE-PATH test fixture — hostile, same fenced ```svg route. Should render inert exactly like the structured-artifact hostile fixture above:\n\n```svg\n<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" onload="window.__hostileOnload2=true"><script>try{window.__hostileScriptRan2=true;window.top.localStorage.getItem("th-token");fetch("https://example.com/beacon2")}catch(e){window.__hostileScriptErr2=String(e)}<\/script><circle cx="100" cy="100" r="80" fill="#f87171" onclick="window.__hostileClick2=true"/><image href="https://example.com/beacon2.png" x="10" y="10" width="30" height="30"/><a href="javascript:window.__hostileLink2=true"><text x="30" y="105" fill="#fff">click</text></a></svg>\n```'}];
+                 text:'svg WRITE-PATH test fixture — hostile, same fenced ```svg route. Should render inert exactly like the structured-artifact hostile fixture above:\n\n```svg\n<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" onload="window.__hostileOnload2=true"><script>try{window.__hostileScriptRan2=true;window.top.localStorage.getItem("th-token");fetch("https://example.com/beacon2")}catch(e){window.__hostileScriptErr2=String(e)}<\/script><circle cx="100" cy="100" r="80" fill="#f87171" onclick="window.__hostileClick2=true"/><image href="https://example.com/beacon2.png" x="10" y="10" width="30" height="30"/><a href="javascript:window.__hostileLink2=true"><text x="30" y="105" fill="#fff">click</text></a></svg>\n```'},
+                {id:'9',thread:'theseus-mobile',from:'chaz',ts:'2026-07-24T02:08:00Z',
+                 text:'channel-link test fixture — benign: tap [#atelier] to switch channel in-page, no reload.'},
+                {id:'10',thread:'atelier',from:'seat-root',ts:'2026-07-24T02:00:00Z',
+                 text:'you switched here via the [#atelier] pill — this is a different channel/thread, loaded without a full page reload.'},
+                {id:'11',thread:'theseus-mobile',from:'seat-root',ts:'2026-07-24T02:09:00Z',
+                 text:'channel-link test fixture — hostile targets, all should stay INERT (plain text, never a pill, never a switch):\nchannel-scheme attempt: [x](channel:javascript:alert(1))\njavascript link: [y](javascript:alert(1))\nmalformed token (space): [#not a channel]\nmalformed token (slash): [#a/b]\nmalformed token (empty): [#]'}];
 var DEMO_SNAP={generated_at:'demo',kernel:{status:'ok',state:'dormant',identity:'cog'},
   wake_line_watcher_alive:true,topology:{shape:'star',nodes:44,edges:43,components:1,lambda2:1,spectral_ratio:44,hub:'kernel:cogos'},
   sessions:[{session_id:'seat-root',role:'seat-root',active:true}],
