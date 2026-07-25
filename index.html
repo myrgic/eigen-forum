@@ -196,7 +196,10 @@ var API='https://api.github.com', POLL_MS=2500; /* was 10000 -- 2026-07-24 laten
   shaves several seconds of average wait off a turn that's already landed on origin/main. */
 var K={repo:'th-repo',token:'th-token',dev:'th-dev',snap:'th-snap',snaprepo:'th-snaprepo',thread:'th-thread'};
 var demo=location.hash==='#demo';
-var cfg={}, timer=null, pending=[], lastIds={};
+var cfg={}, timer=null, pending=[];
+var lastRenderedThread=null, lastRenderedIds=[]; /* what renderChat() actually put in the DOM
+  last time, per the 2026-07-24 poll-storm fix below -- lets a poll tick skip the rebuild
+  entirely when nothing changed, instead of reloading every SVG artifact on every tick */
 var svgDocs=[]; /* reset per renderChat() pass; collects BOTH turn.artifact and fenced-```svg
   sources (see svgArtifactPlaceholder below) so a single post-render loop wires every iframe */
 
@@ -446,6 +449,36 @@ function fetchLedger(){
     .then(function(d){$('err').textContent='';renderChat(d.turns||[])})
     .catch(function(e){$('err').textContent=e.message})
 }
+function renderTurnHtml(t){
+  var isMine=(t.from||'').indexOf(cfg.dev)===0||(t.from||'').indexOf('chaz')===0;
+  var artifactHtml=(t.artifact&&t.artifact.type==='svg')?svgArtifactPlaceholder(t.artifact.svg):'';
+  return '<div class="turn'+(isMine?' mine':'')+'"><div class="meta">'+esc(t.from)+' · '+
+    esc((t.ts||'').replace('T',' ').slice(0,16))+'</div><div class="body md-body">'+mdRender(t.text)+'</div>'+artifactHtml+'</div>';
+}
+/* Wires srcdoc (structured turn.artifact + fenced-```svg, same as ever) and [#name] pill
+   clicks, scoped to whichever root elements are passed -- the WHOLE log on a full rebuild,
+   or just the newly-appended turn nodes on an append-only pass, so already-rendered SVG
+   iframes are never even queried, let alone touched, when they didn't change. */
+function wireArtifacts(roots){
+  roots.forEach(function(root){
+    Array.prototype.forEach.call(root.querySelectorAll('iframe[data-svg-idx]'),function(f){
+      f.srcdoc=svgDocs[+f.getAttribute('data-svg-idx')];
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('button.chan-pill'),function(b){
+      b.addEventListener('click',function(){setChannel(b.getAttribute('data-channel'))});
+    });
+  });
+}
+/* 2026-07-24 poll-storm fix: every POLL_MS tick used to rebuild log.innerHTML from scratch
+   and re-set srcdoc on every SVG-artifact iframe, forcing every sandboxed SVG to reload on
+   every tick even when the ledger hadn't changed -- with POLL_MS at 2.5s that's ~24
+   reloads/minute per artifact. Now: diff the new turn-id list against what's already in the
+   DOM (lastRenderedIds). Identical -> skip the render entirely (no innerHTML touch at all).
+   A pure append (same thread, old ids are a prefix of the new ids) -> parse+insert ONLY the
+   new tail turns, leaving every existing node (and its live iframe) untouched, so nothing
+   already on screen ever reloads. Anything else (thread switch, an edit, or the 60-turn
+   window sliding) -> fall back to the original full rebuild; still correct, just not the
+   fast path -- and even then it only fires on an actual change, not every tick. */
 function renderChat(turns){
   var th=cfg.thread;
   var names={};turns.forEach(function(t){if(t.thread)names[t.thread]=1});
@@ -457,27 +490,33 @@ function renderChat(turns){
   sel.value=th;
   var mine=turns.filter(function(t){return (t.thread||'main')===th}).slice(-60);
   pending=pending.filter(function(p){return !mine.some(function(t){return t.id===p.id})});
-  var log=$('log'), atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;
-  svgDocs=[]; /* module-level — parseBlock's fenced-```svg branch pushes into this same
-    array while mdRender() runs below, alongside the structured turn.artifact push here */
-  log.innerHTML=mine.map(function(t){
-    var isMine=(t.from||'').indexOf(cfg.dev)===0||(t.from||'').indexOf('chaz')===0;
-    var artifactHtml=(t.artifact&&t.artifact.type==='svg')?svgArtifactPlaceholder(t.artifact.svg):'';
-    return '<div class="turn'+(isMine?' mine':'')+'"><div class="meta">'+esc(t.from)+' · '+
-      esc((t.ts||'').replace('T',' ').slice(0,16))+'</div><div class="body md-body">'+mdRender(t.text)+'</div>'+artifactHtml+'</div>'
-  }).join('');
-  /* srcdoc is set as a DOM property, not baked into the HTML string above — that
-     keeps the sanitized document out of attribute-escaping entirely. */
-  Array.prototype.forEach.call(log.querySelectorAll('iframe[data-svg-idx]'),function(f){
-    f.srcdoc=svgDocs[+f.getAttribute('data-svg-idx')];
-  });
-  /* [#name] pills: wired via addEventListener post-render, same posture as the iframe
-     loop above -- never an inline onclick= attribute in the generated markup. */
-  Array.prototype.forEach.call(log.querySelectorAll('button.chan-pill'),function(b){
-    b.addEventListener('click',function(){setChannel(b.getAttribute('data-channel'))});
-  });
   $('pending').textContent=pending.length?pending.length+' sending…':'';
   $('asof').textContent=mine.length+' turns';
+
+  var ids=mine.map(function(t){return t.id});
+  var appendCount=-1;
+  if(th===lastRenderedThread&&ids.length>=lastRenderedIds.length){
+    var prefixOk=true;
+    for(var i=0;i<lastRenderedIds.length;i++){if(lastRenderedIds[i]!==ids[i]){prefixOk=false;break}}
+    if(prefixOk)appendCount=ids.length-lastRenderedIds.length;
+  }
+  if(appendCount===0)return; // nothing new for this thread since the last render -- done.
+
+  var log=$('log'), atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;
+  if(appendCount>0){
+    var tail=mine.slice(mine.length-appendCount);
+    var wrap=document.createElement('div');
+    wrap.innerHTML=tail.map(renderTurnHtml).join('');
+    var added=Array.prototype.slice.call(wrap.children);
+    added.forEach(function(el){log.appendChild(el)});
+    wireArtifacts(added);
+  }else{
+    svgDocs=[]; /* full rebuild only -- an append-only pass must never reset this, or the
+      data-svg-idx values already live in untouched DOM would point past the array's end */
+    log.innerHTML=mine.map(renderTurnHtml).join('');
+    wireArtifacts([log]);
+  }
+  lastRenderedThread=th; lastRenderedIds=ids;
   if(atBottom)log.scrollTop=log.scrollHeight;
 }
 function send(){

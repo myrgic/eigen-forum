@@ -4,8 +4,9 @@
    transit authenticated reads and live in memory/localStorage, nowhere in the
    cache. Same discipline as the book shell. */
 'use strict';
-var VERSION = 'theseus-shell-v4'; /* bumped for the 2026-07-24 latency pass (POLL_MS
-  10000 -> 2500) -- cache-first sw.js needs a manual VERSION bump on every dome-shell
+var VERSION = 'theseus-shell-v5'; /* bumped for the conditional-render poll-storm fix
+  (renderChat now skips the rebuild when nothing changed, appends only new turns
+  otherwise) -- cache-first sw.js needs a manual VERSION bump on every dome-shell
   change until it moves to network-first / stale-while-revalidate (flagged as a
   durable follow-up) */
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
