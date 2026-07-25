@@ -191,7 +191,9 @@
 
 <script>
 "use strict";
-var API='https://api.github.com', POLL_MS=10000;
+var API='https://api.github.com', POLL_MS=2500; /* was 10000 -- 2026-07-24 latency pass:
+  the ~25s Action settle is the dominant cost either way, but a tighter read-side poll still
+  shaves several seconds of average wait off a turn that's already landed on origin/main. */
 var K={repo:'th-repo',token:'th-token',dev:'th-dev',snap:'th-snap',snaprepo:'th-snaprepo',thread:'th-thread'};
 var demo=location.hash==='#demo';
 var cfg={}, timer=null, pending=[], lastIds={};
