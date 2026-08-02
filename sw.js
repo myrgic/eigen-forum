@@ -1,14 +1,12 @@
-/* eigen.forum THESEUS shell — service worker.
+/* eigen.forum shell — service worker.
    Caches the SHELL ONLY: this page, its manifest, its icons. It never touches
    api.github.com and never caches ledger, snapshot, or token bytes — those
    transit authenticated reads and live in memory/localStorage, nowhere in the
    cache. Same discipline as the book shell. */
 'use strict';
-var VERSION = 'theseus-shell-v5'; /* bumped for the conditional-render poll-storm fix
-  (renderChat now skips the rebuild when nothing changed, appends only new turns
-  otherwise) -- cache-first sw.js needs a manual VERSION bump on every dome-shell
-  change until it moves to network-first / stale-while-revalidate (flagged as a
-  durable follow-up) */
+var VERSION = 'eigen-forum-shell-v6'; /* renamed from theseus-shell-v5 as part of the
+  codename rename in the UI layer -- bumped so any stale THESEUS-named cache entry is
+  dropped and every client re-fetches the renamed shell instead of serving old bytes */
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
