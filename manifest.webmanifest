@@ -1,6 +1,6 @@
 {
-  "name": "THESEUS — eigen.forum",
-  "short_name": "THESEUS",
+  "name": "Eigen Forum",
+  "short_name": "Eigen Forum",
   "description": "The forum. Chat and node, one square.",
   "start_url": "./?channel=theseus-mobile",
   "scope": "./",
