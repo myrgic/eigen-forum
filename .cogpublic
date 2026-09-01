@@ -1,0 +1,58 @@
+# .cogpublic — Public release gate for myrgic/eigen-forum
+#
+# ENFORCED BY: the org-level Public Release Gate workflow
+#   (myrgic/.github/.github/workflows/public-release-gate.yml), run in CI on
+#   every PR. Locally, from a checkout of myrgic/.github:
+#     python3 scripts/cogpublic-guard.py --root /path/to/eigen-forum
+#
+# WHY THIS REPO HAS ONE: this is the public PWA shell for the forum UI,
+# served directly to browsers. It carries the residue of the THESEUS codename
+# rename; the gate keeps operator-machine data from following the same path.
+#
+# Baseline dry-run 2026-08-31 with the cogos policy: 9 tracked files scanned,
+# 0 hits.
+
+version: 1
+
+content_guards:
+  - pattern: "/Users/slowbro"
+    description: "Hardcoded operator home directory (macOS)"
+  - pattern: "/home/slowbro"
+    description: "Hardcoded operator home directory (Linux)"
+  - pattern: "-Users-slowbro-"
+    description: "Claude project path encoding"
+  - pattern: "192404964621025291"
+    description: "Personal Discord user snowflake"
+  - pattern: 'sk-[a-zA-Z0-9]{20,}'
+    description: "OpenAI API key pattern"
+  - pattern: 'ghp_[a-zA-Z0-9]{20,}'
+    description: "GitHub personal access token"
+  - pattern: 'xoxb-[a-zA-Z0-9]+'
+    description: "Slack bot token"
+  - pattern: '@gmail\.com|@yahoo\.com|@hotmail\.com'
+    description: "Personal email address (git author emails exempt)"
+
+# DELIBERATELY NOT GUARDED, verified 2026-08-31 — recorded so the next person
+# does not "helpfully" add them:
+#
+#   THESEUS / theseus — remaining occurrences are (a) the demo channel name
+#     'theseus-mobile' baked into index.html's demo fixtures and
+#     manifest.webmanifest start_url, i.e. live public API surface a client
+#     depends on, and (b) sw.js:7-8, the audit trail of the codename rename
+#     ("renamed from theseus-shell-v5"). Guarding it would flag the rename's
+#     own documentation as the defect (same lesson as mod3's .cogpublic).
+#
+#   "chaz" — appears in LICENSE ("Copyright (c) 2025-2026 Chaz Dinkle",
+#     deliberate) and in index.html demo fixtures as the demo sender name.
+#     Both intentional public content.
+#
+#   javascript:/data: URIs, <script>alert — index.html:647 carries
+#     DELIBERATE XSS probe fixtures used to test the markdown sanitizer.
+#     They look alarming and are the test suite doing its job.
+
+exclude:
+  - node_modules/**
+  - "*.png"
+  - "*.ico"
+  - "*.webp"
+  - package-lock.json
